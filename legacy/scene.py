@@ -21,7 +21,7 @@ def main(opt):
     dx = 0.1
     u, b, l, r = np.array([res[1], 0, 0, res[0]]) / screen_to_world_ratio
 
-    gui = ti.GUI('SPH', res, background_color=0x112F41)
+    gui = ti.GUI('SPH', res, background_color=0x112F41, show_gui=False)
     sph = SPHSolver(res,
                     screen_to_world_ratio, [u, b, l, r],
                     alpha=0.30,

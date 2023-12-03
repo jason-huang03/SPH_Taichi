@@ -194,7 +194,7 @@ class SPHSolver:
         for p_i in range(self.particle_num[None]):
             # Compute the grid index
             cell = self.compute_grid_index(self.particle_positions[p_i])
-            offs = self.grid_num_particles[cell].atomic_add(1)
+            offs = ti.atomic_add(self.grid_num_particles[cell], 1)
             self.grid2particles[cell, offs] = p_i
 
     @ti.func
@@ -229,7 +229,7 @@ class SPHSolver:
                                     pos_i - self.particle_positions[p_j]
                             ).norm() < self.dh * 2.00:
                                 self.particle_neighbors[p_i, nb_i] = p_j
-                                nb_i.atomic_add(1)
+                                ti.atomic_add(nb_i, 1)
             self.particle_num_neighbors[p_i] = nb_i
 
     @ti.func
