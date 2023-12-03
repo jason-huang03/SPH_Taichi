@@ -34,7 +34,7 @@ if __name__ == "__main__":
     solver = ps.build_solver()
     solver.initialize()
 
-    window = ti.ui.Window('SPH', (1024, 1024), show_window = True, vsync=False)
+    window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)
 
     scene = ti.ui.Scene()
     camera = ti.ui.Camera()
@@ -84,7 +84,6 @@ if __name__ == "__main__":
             canvas.set_background_color(background_color)
             canvas.circles(ps.x_vis_buffer, radius=ps.particle_radius, color=particle_color)
         elif ps.dim == 3:
-            camera.track_user_inputs(window, movement_speed=movement_speed, hold_key=ti.ui.LMB)
             scene.set_camera(camera)
 
             scene.point_light((2.0, 2.0, 2.0), color=(1.0, 1.0, 1.0))
@@ -95,7 +94,7 @@ if __name__ == "__main__":
     
         if output_frames:
             if cnt % output_interval == 0:
-                window.write_image(f"{scene_name}_output_img/{cnt:06}.png")
+                window.save_image(f"{scene_name}_output_img/{cnt:06}.png")
         
         if cnt % output_interval == 0:
             if output_ply:
@@ -115,4 +114,3 @@ if __name__ == "__main__":
         cnt += 1
         # if cnt > 6000:
         #     break
-        window.show()
