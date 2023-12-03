@@ -64,9 +64,7 @@ class WCSPHSolver(SPHBase):
             f_p = -self.density_0 * self.ps.m_V[p_j] * (dpi + dpj) \
                 * self.cubic_kernel_derivative(x_i-x_j)
             ret += f_p
-            if self.ps.is_dynamic_rigid_body(p_j):
-                self.ps.acceleration[p_j] += -f_p * self.density_0 / self.ps.density[p_j]
-    
+
     @ti.kernel
     def compute_pressure_forces(self):
         for p_i in ti.grouped(self.ps.x):
@@ -75,11 +73,7 @@ class WCSPHSolver(SPHBase):
             self.ps.density[p_i] = ti.max(self.ps.density[p_i], self.density_0)
             self.ps.pressure[p_i] = self.stiffness * (ti.pow(self.ps.density[p_i] / self.density_0, self.exponent) - 1.0)
         for p_i in ti.grouped(self.ps.x):
-            if self.ps.is_static_rigid_body(p_i):
-                self.ps.acceleration[p_i].fill(0)
-                continue
-            elif self.ps.is_dynamic_rigid_body(p_i):
-                continue
+
             dv = ti.Vector([0.0 for _ in range(self.ps.dim)])
             self.ps.for_all_neighbors(p_i, self.compute_pressure_forces_task, dv)
             self.ps.acceleration[p_i] += dv
@@ -121,16 +115,11 @@ class WCSPHSolver(SPHBase):
             f_v = d * boundary_viscosity * (self.density_0 * self.ps.m_V[p_j] / (self.ps.density[p_i])) * v_xy / (
                 r.norm()**2 + 0.01 * self.ps.support_radius**2) * self.cubic_kernel_derivative(r)
             ret += f_v
-            if self.ps.is_dynamic_rigid_body(p_j):
-                self.ps.acceleration[p_j] += -f_v * self.density_0 / self.ps.density[p_j]
 
 
     @ti.kernel
     def compute_non_pressure_forces(self):
         for p_i in ti.grouped(self.ps.x):
-            if self.ps.is_static_rigid_body(p_i):
-                self.ps.acceleration[p_i].fill(0.0)
-                continue
             ############## Body force ###############
             # Add body force
             d_v = ti.Vector(self.g)

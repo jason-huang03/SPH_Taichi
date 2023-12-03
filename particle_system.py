@@ -4,7 +4,6 @@ import trimesh as tm
 from functools import reduce
 from config_builder import SimConfig
 from WCSPH import WCSPHSolver
-from DFSPH import DFSPHSolver
 from scan_single_buffer import parallel_prefix_sum_inclusive_inplace
 
 @ti.data_oriented
@@ -62,36 +61,20 @@ class ParticleSystem:
         #### Process Rigid Blocks ####
         rigid_blocks = self.cfg.get_rigid_blocks()
         rigid_particle_num = 0
-        for rigid in rigid_blocks:
-            particle_num = self.compute_cube_particle_num(rigid["start"], rigid["end"])
-            rigid["particleNum"] = particle_num
-            self.object_collection[rigid["objectId"]] = rigid
-            rigid_particle_num += particle_num
-        
+
         #### Process Rigid Bodies ####
         rigid_bodies = self.cfg.get_rigid_bodies()
-        for rigid_body in rigid_bodies:
-            voxelized_points_np = self.load_rigid_body(rigid_body)
-            rigid_body["particleNum"] = voxelized_points_np.shape[0]
-            rigid_body["voxelizedPoints"] = voxelized_points_np
-            self.object_collection[rigid_body["objectId"]] = rigid_body
-            rigid_particle_num += voxelized_points_np.shape[0]
-        
+ 
         self.fluid_particle_num = fluid_particle_num
-        self.solid_particle_num = rigid_particle_num
+        self.solid_particle_num = 0
         self.particle_max_num = fluid_particle_num + rigid_particle_num
-        self.num_rigid_bodies = len(rigid_blocks)+len(rigid_bodies)
+        self.num_rigid_bodies = 0
 
         #### TODO: Handle the Particle Emitter ####
         # self.particle_max_num += emitted particles
         print(f"Current particle num: {self.particle_num[None]}, Particle max num: {self.particle_max_num}")
 
         #========== Allocate memory ==========#
-        # Rigid body properties
-        if self.num_rigid_bodies > 0:
-            # TODO: Here we actually only need to store rigid boides, however the object id of rigid may not start from 0, so allocate center of mass for all objects
-            self.rigid_rest_cm = ti.Vector.field(self.dim, dtype=float, shape=self.num_rigid_bodies + len(fluid_blocks))
-
         # Particle num of each grid
         self.grid_particles_num = ti.field(int, shape=int(self.grid_num[0]*self.grid_num[1]*self.grid_num[2]))
         self.grid_particles_num_temp = ti.field(int, shape=int(self.grid_num[0]*self.grid_num[1]*self.grid_num[2]))
@@ -166,59 +149,11 @@ class ParticleSystem:
                           color=color,
                           material=1) # 1 indicates fluid
         
-        # TODO: Handle rigid block
-        # Rigid block
-        for rigid in rigid_blocks:
-            obj_id = rigid["objectId"]
-            offset = np.array(rigid["translation"])
-            start = np.array(rigid["start"]) + offset
-            end = np.array(rigid["end"]) + offset
-            scale = np.array(rigid["scale"])
-            velocity = rigid["velocity"]
-            density = rigid["density"]
-            color = rigid["color"]
-            is_dynamic = rigid["isDynamic"]
-            self.add_cube(object_id=obj_id,
-                          lower_corner=start,
-                          cube_size=(end-start)*scale,
-                          velocity=velocity,
-                          density=density, 
-                          is_dynamic=is_dynamic,
-                          color=color,
-                          material=0) # 1 indicates solid
-
-        # Rigid bodies
-        for rigid_body in rigid_bodies:
-            obj_id = rigid_body["objectId"]
-            self.object_id_rigid_body.add(obj_id)
-            num_particles_obj = rigid_body["particleNum"]
-            voxelized_points_np = rigid_body["voxelizedPoints"]
-            is_dynamic = rigid_body["isDynamic"]
-            if is_dynamic:
-                velocity = np.array(rigid_body["velocity"], dtype=np.float32)
-            else:
-                velocity = np.array([0.0 for _ in range(self.dim)], dtype=np.float32)
-            density = rigid_body["density"]
-            color = np.array(rigid_body["color"], dtype=np.int32)
-            self.add_particles(obj_id,
-                               num_particles_obj,
-                               np.array(voxelized_points_np, dtype=np.float32), # position
-                               np.stack([velocity for _ in range(num_particles_obj)]), # velocity
-                               density * np.ones(num_particles_obj, dtype=np.float32), # density
-                               np.zeros(num_particles_obj, dtype=np.float32), # pressure
-                               np.array([0 for _ in range(num_particles_obj)], dtype=np.int32), # material is solid
-                               is_dynamic * np.ones(num_particles_obj, dtype=np.int32), # is_dynamic
-                               np.stack([color for _ in range(num_particles_obj)])) # color
-    
 
     def build_solver(self):
         solver_type = self.cfg.get_cfg("simulationMethod")
         if solver_type == 0:
             return WCSPHSolver(self)
-        elif solver_type == 4:
-            return DFSPHSolver(self)
-        else:
-            raise NotImplementedError(f"Solver type {solver_type} has not been implemented.")
 
     @ti.func
     def add_particle(self, p, obj_id, x, v, density, pressure, material, is_dynamic, color):
@@ -405,47 +340,6 @@ class ParticleSystem:
             if self.object_id[i] == obj_id:
                 self.x_vis_buffer[i] = self.x[i]
                 self.color_vis_buffer[i] = self.color[i] / 255.0
-
-    def dump(self, obj_id):
-        np_object_id = self.object_id.to_numpy()
-        mask = (np_object_id == obj_id).nonzero()
-        np_x = self.x.to_numpy()[mask]
-        np_v = self.v.to_numpy()[mask]
-
-        return {
-            'position': np_x,
-            'velocity': np_v
-        }
-    
-
-    def load_rigid_body(self, rigid_body):
-        obj_id = rigid_body["objectId"]
-        mesh = tm.load(rigid_body["geometryFile"])
-        mesh.apply_scale(rigid_body["scale"])
-        offset = np.array(rigid_body["translation"])
-
-        angle = rigid_body["rotationAngle"] / 360 * 2 * 3.1415926
-        direction = rigid_body["rotationAxis"]
-        rot_matrix = tm.transformations.rotation_matrix(angle, direction, mesh.vertices.mean(axis=0))
-        mesh.apply_transform(rot_matrix)
-        mesh.vertices += offset
-        
-        # Backup the original mesh for exporting obj
-        mesh_backup = mesh.copy()
-        rigid_body["mesh"] = mesh_backup
-        rigid_body["restPosition"] = mesh_backup.vertices
-        rigid_body["restCenterOfMass"] = mesh_backup.vertices.mean(axis=0)
-        is_success = tm.repair.fill_holes(mesh)
-            # print("Is the mesh successfully repaired? ", is_success)
-        voxelized_mesh = mesh.voxelized(pitch=self.particle_diameter)
-        voxelized_mesh = mesh.voxelized(pitch=self.particle_diameter).fill()
-        # voxelized_mesh = mesh.voxelized(pitch=self.particle_diameter).hollow()
-        # voxelized_mesh.show()
-        voxelized_points_np = voxelized_mesh.points
-        print(f"rigid body {obj_id} num: {voxelized_points_np.shape[0]}")
-        
-        return voxelized_points_np
-
 
     def compute_cube_particle_num(self, start, end):
         num_dim = []
