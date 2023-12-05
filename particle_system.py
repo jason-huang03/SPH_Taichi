@@ -380,7 +380,11 @@ class ParticleSystem:
         center_cell = self.pos_to_index(self.x[p_i])
         for offset in ti.grouped(ti.ndrange(*((-1, 2),) * self.dim)):
             grid_index = self.flatten_grid_index(center_cell + offset)
-            for p_j in range(self.grid_particles_num[ti.max(0, grid_index-1)], self.grid_particles_num[grid_index]):
+            start_idx = 0
+            end_idx = self.grid_particles_num[grid_index]
+            if grid_index - 1 >= 0:
+                start_idx = self.grid_particles_num[grid_index-1]
+            for p_j in range(start_idx, end_idx):
                 if p_i[0] != p_j and (self.x[p_i] - self.x[p_j]).norm() < self.support_radius:
                     task(p_i, p_j, ret)
 
