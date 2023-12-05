@@ -4,6 +4,7 @@ import taichi as ti
 import numpy as np
 from config_builder import SimConfig
 from particle_system import ParticleSystem
+from DFSPH import DFSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.5)
 
@@ -31,7 +32,7 @@ if __name__ == "__main__":
 
 
     ps = ParticleSystem(config, GGUI=True)
-    solver = ps.build_solver()
+    solver = DFSPHSolver(ps)
     solver.initialize()
 
     window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)

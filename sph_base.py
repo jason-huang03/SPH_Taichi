@@ -1,11 +1,12 @@
 from matplotlib.pyplot import axis
 import taichi as ti
+from particle_system import ParticleSystem
 import numpy as np
 
 
 @ti.data_oriented
 class SPHBase:
-    def __init__(self, particle_system):
+    def __init__(self, particle_system: ParticleSystem):
         self.ps = particle_system
         self.g = ti.Vector([0.0, -9.81, 0.0])  # Gravity
         if self.ps.dim == 2:
@@ -264,8 +265,4 @@ class SPHBase:
         self.ps.initialize_particle_system()
         self.compute_moving_boundary_volume()
         self.substep()
-        self.solve_rigid_body()
-        if self.ps.dim == 2:
-            self.enforce_boundary_2D(self.ps.material_fluid)
-        elif self.ps.dim == 3:
-            self.enforce_boundary_3D(self.ps.material_fluid)
+        self.enforce_boundary_3D(self.ps.material_fluid)
