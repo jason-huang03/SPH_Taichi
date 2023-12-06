@@ -1,11 +1,11 @@
 from matplotlib.pyplot import axis
 import taichi as ti
 import numpy as np
-from particle_system import Container3d
+from particle_system import DFSPHContainer3D
 
 @ti.data_oriented
 class SPHBase:
-    def __init__(self, particle_system: Container3d):
+    def __init__(self, particle_system: DFSPHContainer3D):
         self.container = particle_system
         self.g = ti.Vector([0.0, -9.81, 0.0])  # Gravity
         if self.container.dim == 2:
@@ -21,7 +21,7 @@ class SPHBase:
         self.dt[None] = 1e-4
 
     @ti.func
-    def cubic_kernel(self, r_norm):
+    def cubic_kernel(self, R_mod):
         res = ti.cast(0.0, ti.f32)
         h = self.container.dh
         # value of cubic spline smoothing kernel
@@ -33,7 +33,7 @@ class SPHBase:
         elif self.container.dim == 3:
             k = 8 / np.pi
         k /= h ** self.container.dim
-        q = r_norm / h
+        q = R_mod / h
         if q <= 1.0:
             if q <= 0.5:
                 q2 = q * q
@@ -44,7 +44,7 @@ class SPHBase:
         return res
 
     @ti.func
-    def cubic_kernel_derivative(self, r):
+    def cubic_kernel_derivative(self, R):
         h = self.container.dh
         # derivative of cubic spline smoothing kernel
         k = 1.0
@@ -55,11 +55,11 @@ class SPHBase:
         elif self.container.dim == 3:
             k = 8 / np.pi
         k = 6. * k / h ** self.container.dim
-        r_norm = r.norm()
-        q = r_norm / h
+        R_mod = R.norm()
+        q = R_mod / h
         res = ti.Vector([0.0 for _ in range(self.container.dim)])
-        if r_norm > 1e-5 and q <= 1.0:
-            grad_q = r / (r_norm * h)
+        if R_mod > 1e-5 and q <= 1.0:
+            grad_q = R / (R_mod * h)
             if q <= 0.5:
                 res = k * q * (3.0 * q - 2.0) * grad_q
             else:
@@ -77,12 +77,6 @@ class SPHBase:
                 r)
         return res
 
-    def initialize(self):
-        self.container.initialize_particle_system()
-        for r_obj_id in self.container.object_id_rigid_body:
-            self.compute_rigid_rest_cm(r_obj_id)
-        self.compute_static_boundary_volume()
-        self.compute_moving_boundary_volume()
 
     @ti.kernel
     def compute_rigid_rest_cm(self, object_id: int):
@@ -95,7 +89,7 @@ class SPHBase:
                 continue
             delta = self.cubic_kernel(0.0)
             self.container.for_all_neighbors(p_i, self.compute_boundary_volume_task, delta)
-            self.container.particle_volumes[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
+            self.container.particle_original_volumes[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
 
     @ti.func
     def compute_boundary_volume_task(self, p_i, p_j, delta: ti.template()):
@@ -110,7 +104,7 @@ class SPHBase:
                 continue
             delta = self.cubic_kernel(0.0)
             self.container.for_all_neighbors(p_i, self.compute_boundary_volume_task, delta)
-            self.container.particle_volumes[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
+            self.container.particle_original_volumes[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
 
     def substep(self):
         pass
@@ -125,7 +119,7 @@ class SPHBase:
     @ti.kernel
     def enforce_boundary_2D(self, particle_type:int):
         for p_i in ti.grouped(self.container.particle_positions):
-            if self.container.particle_materials[p_i] == particle_type and self.container.is_dynamic[p_i]: 
+            if self.container.particle_materials[p_i] == particle_type and self.container.particle_is_dynamic[p_i]: 
                 pos = self.container.particle_positions[p_i]
                 collision_normal = ti.Vector([0.0, 0.0])
                 if pos[0] > self.container.domain_size[0] - self.container.padding:
@@ -149,7 +143,7 @@ class SPHBase:
     @ti.kernel
     def enforce_boundary_3D(self, particle_type:int):
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == particle_type and self.container.is_dynamic[p_i]:
+            if self.container.particle_materials[p_i] == particle_type and self.container.particle_is_dynamic[p_i]:
                 pos = self.container.particle_positions[p_i]
                 collision_normal = ti.Vector([0.0, 0.0, 0.0])
                 if pos[0] > self.container.domain_size[0] - self.container.padding:
@@ -184,7 +178,7 @@ class SPHBase:
         sum_m = 0.0
         cm = ti.Vector([0.0, 0.0, 0.0])
         for p_i in range(self.container.particle_num[None]):
-            if self.container.is_dynamic_rigid_body(p_i) and self.container.object_id[p_i] == object_id:
+            if self.container.is_dynamic_rigid_body(p_i) and self.container.particle_object_id[p_i] == object_id:
                 mass = self.container.m_V0 * self.container.particle_densities[p_i]
                 cm += mass * self.container.particle_positions[p_i]
                 sum_m += mass
@@ -204,7 +198,7 @@ class SPHBase:
         # A
         A = ti.Matrix([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
         for p_i in range(self.container.particle_num[None]):
-            if self.container.is_dynamic_rigid_body(p_i) and self.container.object_id[p_i] == object_id:
+            if self.container.is_dynamic_rigid_body(p_i) and self.container.particle_object_id[p_i] == object_id:
                 q = self.container.x_0[p_i] - self.container.rigid_rest_cm[object_id]
                 p = self.container.particle_positions[p_i] - cm
                 A += self.container.m_V0 * self.container.particle_densities[p_i] * p.outer_product(q)
@@ -215,7 +209,7 @@ class SPHBase:
             R = ti.Matrix.identity(ti.f32, 3)
         
         for p_i in range(self.container.particle_num[None]):
-            if self.container.is_dynamic_rigid_body(p_i) and self.container.object_id[p_i] == object_id:
+            if self.container.is_dynamic_rigid_body(p_i) and self.container.particle_object_id[p_i] == object_id:
                 goal = cm + R @ (self.container.x_0[p_i] - self.container.rigid_rest_cm[object_id])
                 corr = (goal - self.container.particle_positions[p_i]) * 1.0
                 self.container.particle_positions[p_i] += corr
@@ -261,7 +255,7 @@ class SPHBase:
 
 
     def step(self):
-        self.container.initialize_particle_system()
+        self.container.prepare_neighborhood_search()
         self.compute_moving_boundary_volume()
         self.substep()
         self.solve_rigid_body()

@@ -3,8 +3,8 @@ import argparse
 import taichi as ti
 import numpy as np
 from config_builder import SimConfig
-from particle_system import Container3d
-from DFSPH import DFSPHSolver
+from particle_system import DFSPHContainer3D
+from DFSPH import DFSPHSolver3D
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.5)
 
@@ -31,13 +31,12 @@ if __name__ == "__main__":
         os.makedirs(f"{scene_name}_output", exist_ok=True)
 
 
-    ps = Container3d(config, GGUI=True)
-    solver = DFSPHSolver(ps)
-    solver.initialize()
+    ps = DFSPHContainer3D(config, GGUI=True)
+    solver = DFSPHSolver3D(ps)
 
-    ps.initialize_particle_system()
+    ps.prepare_neighborhood_search()
     solver.compute_density()
-    solver.compute_DFSPH_factor()
+    solver.compute_alpha()
 
     window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)
 

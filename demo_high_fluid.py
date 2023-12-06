@@ -1,7 +1,7 @@
 import taichi as ti
 import numpy as np
 import trimesh as tm
-from particle_system import Container3d
+from particle_system import DFSPHContainer3D
 from WCSPH import WCSPHSolver
 from IISPH import IISPHSolver
 
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     output_ply = False
     solver_type = "WCSPH"
     # solver_type = "IISPH"
-    ps = Container3d(domain_size, GGUI=True)
+    ps = DFSPHContainer3D(domain_size, GGUI=True)
 
     x_offset = 0.2
     y_offset = 0.2

@@ -6,7 +6,7 @@ from config_builder import SimConfig
 from scan_single_buffer import parallel_prefix_sum_inclusive_inplace
 
 @ti.data_oriented
-class Container3d:
+class DFSPHContainer3D:
     def __init__(self, config: SimConfig, GGUI=False):
         self.cfg = config
         self.GGUI = GGUI
@@ -60,9 +60,6 @@ class Container3d:
         #### Process Rigid Blocks ####
         rigid_particle_num = 0
 
-        
-
-        
         self.fluid_particle_num = fluid_particle_num
         self.solid_particle_num = rigid_particle_num
         self.particle_max_num = fluid_particle_num + rigid_particle_num
@@ -74,24 +71,24 @@ class Container3d:
 
         #========== Allocate memory ==========#
         # Particle num of each grid
-        self.grid_particles_num = ti.field(int, shape=int(self.grid_num[0]*self.grid_num[1]*self.grid_num[2]))
-        self.grid_particles_num_temp = ti.field(int, shape=int(self.grid_num[0]*self.grid_num[1]*self.grid_num[2]))
+        self.grid_num_particles = ti.field(int, shape=int(self.grid_num[0]*self.grid_num[1]*self.grid_num[2]))
+        self.grid_num_particles_temp = ti.field(int, shape=int(self.grid_num[0]*self.grid_num[1]*self.grid_num[2]))
 
-        self.prefix_sum_executor = ti.algorithms.PrefixSumExecutor(self.grid_particles_num.shape[0])
+        self.prefix_sum_executor = ti.algorithms.PrefixSumExecutor(self.grid_num_particles.shape[0])
 
         # Particle related properties
-        self.object_id = ti.field(dtype=int, shape=self.particle_max_num)
+        self.particle_object_id = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_positions = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.x_0 = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_velocities = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_accelerations = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_volumes = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_original_volumes = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_masses = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_densities = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_pressures = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_materials = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_colors = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
-        self.is_dynamic = ti.field(dtype=int, shape=self.particle_max_num)
+        self.particle_is_dynamic = ti.field(dtype=int, shape=self.particle_max_num)
 
         self.particle_dfsph_alphas = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_dfsph_kappa = ti.field(dtype=float, shape=self.particle_max_num)
@@ -100,21 +97,17 @@ class Container3d:
         self.particle_densities_derivatives = ti.field(dtype=float, shape=self.particle_max_num)
 
         # Buffer for sort
-        self.object_id_buffer = ti.field(dtype=int, shape=self.particle_max_num)
+        self.particle_object_id_buffer = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_positions_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.x_0_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_velocities_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_accelerations_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_volumes_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_masses_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_pressure_buffers = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_materials_buffer = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_colors_buffer = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
         self.is_dynamic_buffer = ti.field(dtype=int, shape=self.particle_max_num)
 
-        self.particle_dfsph_alphas_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.density_adv_buffer = ti.field(dtype=float, shape=self.particle_max_num)
 
         # Grid id for each particle
         self.grid_ids = ti.field(int, shape=self.particle_max_num)
@@ -150,16 +143,16 @@ class Container3d:
 
     @ti.func
     def add_particle(self, p, obj_id, x, v, density, pressure, material, is_dynamic, color):
-        self.object_id[p] = obj_id
+        self.particle_object_id[p] = obj_id
         self.particle_positions[p] = x
         self.x_0[p] = x
         self.particle_velocities[p] = v
         self.particle_densities[p] = density
-        self.particle_volumes[p] = self.m_V0
+        self.particle_original_volumes[p] = self.m_V0
         self.particle_masses[p] = self.m_V0 * density
         self.particle_pressures[p] = pressure
         self.particle_materials[p] = material
-        self.is_dynamic[p] = is_dynamic
+        self.particle_is_dynamic[p] = is_dynamic
         self.particle_colors[p] = color
     
     def add_particles(self,
@@ -228,79 +221,67 @@ class Container3d:
 
     @ti.func
     def is_static_rigid_body(self, p):
-        return self.particle_materials[p] == self.material_solid and (not self.is_dynamic[p])
+        return self.particle_materials[p] == self.material_solid and (not self.particle_is_dynamic[p])
 
 
     @ti.func
     def is_dynamic_rigid_body(self, p):
-        return self.particle_materials[p] == self.material_solid and self.is_dynamic[p]
+        return self.particle_materials[p] == self.material_solid and self.particle_is_dynamic[p]
     
 
     @ti.kernel
     def update_grid_id(self):
-        for I in ti.grouped(self.grid_particles_num):
-            self.grid_particles_num[I] = 0
+        for I in ti.grouped(self.grid_num_particles):
+            self.grid_num_particles[I] = 0
         for I in ti.grouped(self.particle_positions):
             grid_index = self.get_flatten_grid_index(self.particle_positions[I])
             self.grid_ids[I] = grid_index
-            ti.atomic_add(self.grid_particles_num[grid_index], 1)
-        for I in ti.grouped(self.grid_particles_num):
-            self.grid_particles_num_temp[I] = self.grid_particles_num[I]
+            ti.atomic_add(self.grid_num_particles[grid_index], 1)
+        for I in ti.grouped(self.grid_num_particles):
+            self.grid_num_particles_temp[I] = self.grid_num_particles[I]
     
     @ti.kernel
-    def counting_sort(self):
+    def reorder_particles(self):
         # FIXME: make it the actual particle num
         for i in range(self.particle_max_num):
             I = self.particle_max_num - 1 - i
             base_offset = 0
             if self.grid_ids[I] - 1 >= 0:
-                base_offset = self.grid_particles_num[self.grid_ids[I]-1]
-            self.grid_ids_new[I] = ti.atomic_sub(self.grid_particles_num_temp[self.grid_ids[I]], 1) - 1 + base_offset
+                base_offset = self.grid_num_particles[self.grid_ids[I]-1]
+            self.grid_ids_new[I] = ti.atomic_sub(self.grid_num_particles_temp[self.grid_ids[I]], 1) - 1 + base_offset
 
         for I in ti.grouped(self.grid_ids):
             new_index = self.grid_ids_new[I]
             self.grid_ids_buffer[new_index] = self.grid_ids[I]
-            self.object_id_buffer[new_index] = self.object_id[I]
+            self.particle_object_id_buffer[new_index] = self.particle_object_id[I]
             self.x_0_buffer[new_index] = self.x_0[I]
             self.particle_positions_buffer[new_index] = self.particle_positions[I]
             self.particle_velocities_buffer[new_index] = self.particle_velocities[I]
-            self.particle_accelerations_buffer[new_index] = self.particle_accelerations[I]
-            self.particle_volumes_buffer[new_index] = self.particle_volumes[I]
+            self.particle_volumes_buffer[new_index] = self.particle_original_volumes[I]
             self.particle_masses_buffer[new_index] = self.particle_masses[I]
             self.particle_densities_buffer[new_index] = self.particle_densities[I]
-            self.particle_pressure_buffers[new_index] = self.particle_pressures[I]
             self.particle_materials_buffer[new_index] = self.particle_materials[I]
             self.particle_colors_buffer[new_index] = self.particle_colors[I]
-            self.is_dynamic_buffer[new_index] = self.is_dynamic[I]
+            self.is_dynamic_buffer[new_index] = self.particle_is_dynamic[I]
 
-            if ti.static(self.simulation_method == 4):
-                self.particle_dfsph_alphas_buffer[new_index] = self.particle_dfsph_alphas[I]
-                self.density_adv_buffer[new_index] = self.particle_densities_star[I]
-        
         for I in ti.grouped(self.particle_positions):
             self.grid_ids[I] = self.grid_ids_buffer[I]
-            self.object_id[I] = self.object_id_buffer[I]
+            self.particle_object_id[I] = self.particle_object_id_buffer[I]
             self.x_0[I] = self.x_0_buffer[I]
             self.particle_positions[I] = self.particle_positions_buffer[I]
             self.particle_velocities[I] = self.particle_velocities_buffer[I]
-            self.particle_accelerations[I] = self.particle_accelerations_buffer[I]
-            self.particle_volumes[I] = self.particle_volumes_buffer[I]
+            self.particle_original_volumes[I] = self.particle_volumes_buffer[I]
             self.particle_masses[I] = self.particle_masses_buffer[I]
             self.particle_densities[I] = self.particle_densities_buffer[I]
-            self.particle_pressures[I] = self.particle_pressure_buffers[I]
             self.particle_materials[I] = self.particle_materials_buffer[I]
             self.particle_colors[I] = self.particle_colors_buffer[I]
-            self.is_dynamic[I] = self.is_dynamic_buffer[I]
+            self.particle_is_dynamic[I] = self.is_dynamic_buffer[I]
 
-            if ti.static(self.simulation_method == 4):
-                self.particle_dfsph_alphas[I] = self.particle_dfsph_alphas_buffer[I]
-                self.particle_densities_star[I] = self.density_adv_buffer[I]
-    
 
-    def initialize_particle_system(self):
+    def prepare_neighborhood_search(self):
         self.update_grid_id()
-        self.prefix_sum_executor.run(self.grid_particles_num)
-        self.counting_sort()
+        self.prefix_sum_executor.run(self.grid_num_particles)
+        self.reorder_particles()
     
 
     @ti.func
@@ -309,9 +290,9 @@ class Container3d:
         for offset in ti.grouped(ti.ndrange(*((-1, 2),) * self.dim)):
             grid_index = self.flatten_grid_index(center_cell + offset)
             start_idx = 0
-            end_idx = self.grid_particles_num[grid_index]
+            end_idx = self.grid_num_particles[grid_index]
             if grid_index - 1 >= 0:
-                start_idx = self.grid_particles_num[grid_index-1]
+                start_idx = self.grid_num_particles[grid_index-1]
             for p_j in range(start_idx, end_idx):
                 if p_i != p_j and (self.particle_positions[p_i] - self.particle_positions[p_j]).norm() < self.dh:
                     task(p_i, p_j, ret)
@@ -334,12 +315,12 @@ class Container3d:
         assert self.GGUI
         # FIXME: make it equal to actual particle num
         for i in range(self.particle_max_num):
-            if self.object_id[i] == obj_id:
+            if self.particle_object_id[i] == obj_id:
                 self.x_vis_buffer[i] = self.particle_positions[i]
                 self.color_vis_buffer[i] = self.particle_colors[i] / 255.0
 
     def dump(self, obj_id):
-        np_object_id = self.object_id.to_numpy()
+        np_object_id = self.particle_object_id.to_numpy()
         mask = (np_object_id == obj_id).nonzero()
         np_x = self.particle_positions.to_numpy()[mask]
         np_v = self.particle_velocities.to_numpy()[mask]
