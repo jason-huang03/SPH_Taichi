@@ -6,7 +6,7 @@ from config_builder import SimConfig
 from scan_single_buffer import parallel_prefix_sum_inclusive_inplace
 
 @ti.data_oriented
-class ParticleSystem:
+class Container3d:
     def __init__(self, config: SimConfig, GGUI=False):
         self.cfg = config
         self.GGUI = GGUI
@@ -94,6 +94,8 @@ class ParticleSystem:
         self.is_dynamic = ti.field(dtype=int, shape=self.particle_max_num)
 
         self.particle_dfsph_alphas = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_dfsph_kappa = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_dfsph_kappa_v = ti.field(dtype=float, shape=self.particle_max_num)
         self.density_adv = ti.field(dtype=float, shape=self.particle_max_num)
 
         # Buffer for sort
@@ -310,7 +312,7 @@ class ParticleSystem:
             if grid_index - 1 >= 0:
                 start_idx = self.grid_particles_num[grid_index-1]
             for p_j in range(start_idx, end_idx):
-                if p_i[0] != p_j and (self.particle_positions[p_i] - self.particle_positions[p_j]).norm() < self.dh:
+                if p_i != p_j and (self.particle_positions[p_i] - self.particle_positions[p_j]).norm() < self.dh:
                     task(p_i, p_j, ret)
 
     @ti.kernel
