@@ -4,6 +4,7 @@ import taichi as ti
 import numpy as np
 from config_builder import SimConfig
 from particle_system import ParticleSystem
+from DFSPH import DFSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.5)
 
@@ -31,7 +32,7 @@ if __name__ == "__main__":
 
 
     ps = ParticleSystem(config, GGUI=True)
-    solver = ps.build_solver()
+    solver = DFSPHSolver(ps)
     solver.initialize()
 
     window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)
@@ -82,12 +83,12 @@ if __name__ == "__main__":
         ps.copy_to_vis_buffer(invisible_objects=invisible_objects)
         if ps.dim == 2:
             canvas.set_background_color(background_color)
-            canvas.circles(ps.x_vis_buffer, radius=ps.particle_radius, color=particle_color)
+            canvas.circles(ps.x_vis_buffer, radius=ps.dx, color=particle_color)
         elif ps.dim == 3:
             scene.set_camera(camera)
 
             scene.point_light((2.0, 2.0, 2.0), color=(1.0, 1.0, 1.0))
-            scene.particles(ps.x_vis_buffer, radius=ps.particle_radius, per_vertex_color=ps.color_vis_buffer)
+            scene.particles(ps.x_vis_buffer, radius=ps.dx, per_vertex_color=ps.color_vis_buffer)
 
             scene.lines(box_anchors, indices=box_lines_indices, color = (0.99, 0.68, 0.28), width = 1.0)
             canvas.scene(scene)

@@ -1,11 +1,11 @@
 from matplotlib.pyplot import axis
 import taichi as ti
 import numpy as np
-
+from particle_system import ParticleSystem
 
 @ti.data_oriented
 class SPHBase:
-    def __init__(self, particle_system):
+    def __init__(self, particle_system: ParticleSystem):
         self.ps = particle_system
         self.g = ti.Vector([0.0, -9.81, 0.0])  # Gravity
         if self.ps.dim == 2:
@@ -23,7 +23,7 @@ class SPHBase:
     @ti.func
     def cubic_kernel(self, r_norm):
         res = ti.cast(0.0, ti.f32)
-        h = self.ps.support_radius
+        h = self.ps.dh
         # value of cubic spline smoothing kernel
         k = 1.0
         if self.ps.dim == 1:
@@ -45,7 +45,7 @@ class SPHBase:
 
     @ti.func
     def cubic_kernel_derivative(self, r):
-        h = self.ps.support_radius
+        h = self.ps.dh
         # derivative of cubic spline smoothing kernel
         k = 1.0
         if self.ps.dim == 1:
@@ -70,10 +70,10 @@ class SPHBase:
     @ti.func
     def viscosity_force(self, p_i, p_j, r):
         # Compute the viscosity force contribution
-        v_xy = (self.ps.v[p_i] -
-                self.ps.v[p_j]).dot(r)
-        res = 2 * (self.ps.dim + 2) * self.viscosity * (self.ps.m[p_j] / (self.ps.density[p_j])) * v_xy / (
-            r.norm()**2 + 0.01 * self.ps.support_radius**2) * self.cubic_kernel_derivative(
+        v_xy = (self.ps.particle_velocities[p_i] -
+                self.ps.particle_velocities[p_j]).dot(r)
+        res = 2 * (self.ps.dim + 2) * self.viscosity * (self.ps.particle_masses[p_j] / (self.ps.particle_densities[p_j])) * v_xy / (
+            r.norm()**2 + 0.01 * self.ps.dh**2) * self.cubic_kernel_derivative(
                 r)
         return res
 
@@ -90,27 +90,27 @@ class SPHBase:
 
     @ti.kernel
     def compute_static_boundary_volume(self):
-        for p_i in ti.grouped(self.ps.x):
+        for p_i in ti.grouped(self.ps.particle_positions):
             if not self.ps.is_static_rigid_body(p_i):
                 continue
             delta = self.cubic_kernel(0.0)
             self.ps.for_all_neighbors(p_i, self.compute_boundary_volume_task, delta)
-            self.ps.m_V[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
+            self.ps.particle_volumes[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
 
     @ti.func
     def compute_boundary_volume_task(self, p_i, p_j, delta: ti.template()):
-        if self.ps.material[p_j] == self.ps.material_solid:
-            delta += self.cubic_kernel((self.ps.x[p_i] - self.ps.x[p_j]).norm())
+        if self.ps.particle_materials[p_j] == self.ps.material_solid:
+            delta += self.cubic_kernel((self.ps.particle_positions[p_i] - self.ps.particle_positions[p_j]).norm())
 
 
     @ti.kernel
     def compute_moving_boundary_volume(self):
-        for p_i in ti.grouped(self.ps.x):
+        for p_i in ti.grouped(self.ps.particle_positions):
             if not self.ps.is_dynamic_rigid_body(p_i):
                 continue
             delta = self.cubic_kernel(0.0)
             self.ps.for_all_neighbors(p_i, self.compute_boundary_volume_task, delta)
-            self.ps.m_V[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
+            self.ps.particle_volumes[p_i] = 1.0 / delta * 3.0  # TODO: the 3.0 here is a coefficient for missing particles by trail and error... need to figure out how to determine it sophisticatedly
 
     def substep(self):
         pass
@@ -119,28 +119,28 @@ class SPHBase:
     def simulate_collisions(self, p_i, vec):
         # Collision factor, assume roughly (1-c_f)*velocity loss after collision
         c_f = 0.5
-        self.ps.v[p_i] -= (
-            1.0 + c_f) * self.ps.v[p_i].dot(vec) * vec
+        self.ps.particle_velocities[p_i] -= (
+            1.0 + c_f) * self.ps.particle_velocities[p_i].dot(vec) * vec
 
     @ti.kernel
     def enforce_boundary_2D(self, particle_type:int):
-        for p_i in ti.grouped(self.ps.x):
-            if self.ps.material[p_i] == particle_type and self.ps.is_dynamic[p_i]: 
-                pos = self.ps.x[p_i]
+        for p_i in ti.grouped(self.ps.particle_positions):
+            if self.ps.particle_materials[p_i] == particle_type and self.ps.is_dynamic[p_i]: 
+                pos = self.ps.particle_positions[p_i]
                 collision_normal = ti.Vector([0.0, 0.0])
                 if pos[0] > self.ps.domain_size[0] - self.ps.padding:
                     collision_normal[0] += 1.0
-                    self.ps.x[p_i][0] = self.ps.domain_size[0] - self.ps.padding
+                    self.ps.particle_positions[p_i][0] = self.ps.domain_size[0] - self.ps.padding
                 if pos[0] <= self.ps.padding:
                     collision_normal[0] += -1.0
-                    self.ps.x[p_i][0] = self.ps.padding
+                    self.ps.particle_positions[p_i][0] = self.ps.padding
 
                 if pos[1] > self.ps.domain_size[1] - self.ps.padding:
                     collision_normal[1] += 1.0
-                    self.ps.x[p_i][1] = self.ps.domain_size[1] - self.ps.padding
+                    self.ps.particle_positions[p_i][1] = self.ps.domain_size[1] - self.ps.padding
                 if pos[1] <= self.ps.padding:
                     collision_normal[1] += -1.0
-                    self.ps.x[p_i][1] = self.ps.padding
+                    self.ps.particle_positions[p_i][1] = self.ps.padding
                 collision_normal_length = collision_normal.norm()
                 if collision_normal_length > 1e-6:
                     self.simulate_collisions(
@@ -148,30 +148,30 @@ class SPHBase:
 
     @ti.kernel
     def enforce_boundary_3D(self, particle_type:int):
-        for p_i in ti.grouped(self.ps.x):
-            if self.ps.material[p_i] == particle_type and self.ps.is_dynamic[p_i]:
-                pos = self.ps.x[p_i]
+        for p_i in ti.grouped(self.ps.particle_positions):
+            if self.ps.particle_materials[p_i] == particle_type and self.ps.is_dynamic[p_i]:
+                pos = self.ps.particle_positions[p_i]
                 collision_normal = ti.Vector([0.0, 0.0, 0.0])
                 if pos[0] > self.ps.domain_size[0] - self.ps.padding:
                     collision_normal[0] += 1.0
-                    self.ps.x[p_i][0] = self.ps.domain_size[0] - self.ps.padding
+                    self.ps.particle_positions[p_i][0] = self.ps.domain_size[0] - self.ps.padding
                 if pos[0] <= self.ps.padding:
                     collision_normal[0] += -1.0
-                    self.ps.x[p_i][0] = self.ps.padding
+                    self.ps.particle_positions[p_i][0] = self.ps.padding
 
                 if pos[1] > self.ps.domain_size[1] - self.ps.padding:
                     collision_normal[1] += 1.0
-                    self.ps.x[p_i][1] = self.ps.domain_size[1] - self.ps.padding
+                    self.ps.particle_positions[p_i][1] = self.ps.domain_size[1] - self.ps.padding
                 if pos[1] <= self.ps.padding:
                     collision_normal[1] += -1.0
-                    self.ps.x[p_i][1] = self.ps.padding
+                    self.ps.particle_positions[p_i][1] = self.ps.padding
 
                 if pos[2] > self.ps.domain_size[2] - self.ps.padding:
                     collision_normal[2] += 1.0
-                    self.ps.x[p_i][2] = self.ps.domain_size[2] - self.ps.padding
+                    self.ps.particle_positions[p_i][2] = self.ps.domain_size[2] - self.ps.padding
                 if pos[2] <= self.ps.padding:
                     collision_normal[2] += -1.0
-                    self.ps.x[p_i][2] = self.ps.padding
+                    self.ps.particle_positions[p_i][2] = self.ps.padding
 
                 collision_normal_length = collision_normal.norm()
                 if collision_normal_length > 1e-6:
@@ -185,8 +185,8 @@ class SPHBase:
         cm = ti.Vector([0.0, 0.0, 0.0])
         for p_i in range(self.ps.particle_num[None]):
             if self.ps.is_dynamic_rigid_body(p_i) and self.ps.object_id[p_i] == object_id:
-                mass = self.ps.m_V0 * self.ps.density[p_i]
-                cm += mass * self.ps.x[p_i]
+                mass = self.ps.m_V0 * self.ps.particle_densities[p_i]
+                cm += mass * self.ps.particle_positions[p_i]
                 sum_m += mass
         cm /= sum_m
         return cm
@@ -206,8 +206,8 @@ class SPHBase:
         for p_i in range(self.ps.particle_num[None]):
             if self.ps.is_dynamic_rigid_body(p_i) and self.ps.object_id[p_i] == object_id:
                 q = self.ps.x_0[p_i] - self.ps.rigid_rest_cm[object_id]
-                p = self.ps.x[p_i] - cm
-                A += self.ps.m_V0 * self.ps.density[p_i] * p.outer_product(q)
+                p = self.ps.particle_positions[p_i] - cm
+                A += self.ps.m_V0 * self.ps.particle_densities[p_i] * p.outer_product(q)
 
         R, S = ti.polar_decompose(A)
         
@@ -217,8 +217,8 @@ class SPHBase:
         for p_i in range(self.ps.particle_num[None]):
             if self.ps.is_dynamic_rigid_body(p_i) and self.ps.object_id[p_i] == object_id:
                 goal = cm + R @ (self.ps.x_0[p_i] - self.ps.rigid_rest_cm[object_id])
-                corr = (goal - self.ps.x[p_i]) * 1.0
-                self.ps.x[p_i] += corr
+                corr = (goal - self.ps.particle_positions[p_i]) * 1.0
+                self.ps.particle_positions[p_i] += corr
         return R
         
 

@@ -169,7 +169,7 @@ if __name__ == "__main__":
         # ps.copy_to_vis_buffer(invisible_objects=[1])
         if ps.dim == 2:
             canvas.set_background_color(background_color)
-            canvas.circles(ps.x_vis_buffer, radius=ps.particle_radius / 5, color=particle_color)
+            canvas.circles(ps.x_vis_buffer, radius=ps.dx / 5, color=particle_color)
         elif ps.dim == 3:
             # # user controlling of camera
             # position_change = ti.Vector([0.0, 0.0, 0.0])
@@ -186,7 +186,7 @@ if __name__ == "__main__":
 
             scene.point_light((2.0, 2.0, 2.0), color=(1.0, 1.0, 1.0))
             # scene.particles(ps.x_vis_buffer, radius=ps.particle_radius, per_vertex_color=ps.color_vis_buffer)
-            scene.particles(ps.x, radius=ps.particle_radius, color=(50/255,100/255,200/255))
+            scene.particles(ps.particle_positions, radius=ps.dx, color=(50/255,100/255,200/255))
 
             scene.lines(box_anchors, indices=box_lines_indices, color = (0.99, 0.68, 0.28), width = 1.0)
             canvas.scene(scene)
