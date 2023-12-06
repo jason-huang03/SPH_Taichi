@@ -20,7 +20,7 @@ class DFSPHSolver(SPHBase):
     
 
     @ti.func
-    def compute_densities_task(self, p_i, p_j, ret: ti.template()):
+    def compute_density_task(self, p_i, p_j, ret: ti.template()):
         pos_i = self.container.particle_positions[p_i]
         if self.container.particle_materials[p_j] == self.container.material_fluid:
             # Fluid neighbors
@@ -31,14 +31,14 @@ class DFSPHSolver(SPHBase):
 
 
     @ti.kernel
-    def compute_densities(self):
+    def compute_density(self):
         """
         compute density for each particle from mass of neighbors
         """
         for p_i in range(self.container.particle_num[None]):
             self.container.particle_densities[p_i] = self.container.particle_volumes[p_i] * self.cubic_kernel(0.0)
             density_i = 0.0
-            self.container.for_all_neighbors(p_i, self.compute_densities_task, density_i)
+            self.container.for_all_neighbors(p_i, self.compute_density_task, density_i)
             self.container.particle_densities[p_i] += density_i
             self.container.particle_densities[p_i] *= self.density_0
     
@@ -87,7 +87,7 @@ class DFSPHSolver(SPHBase):
     
 
     @ti.kernel
-    def update_positions(self):
+    def update_position(self):
         # Update position
         for p_i in range(self.container.particle_num[None]):
             self.container.particle_positions[p_i] += self.dt[None] * self.container.particle_velocities[p_i]
@@ -149,7 +149,7 @@ class DFSPHSolver(SPHBase):
                 if num_neighbors < 7:
                     density_adv = 0.0
      
-            self.container.density_adv[p_i] = density_adv
+            self.container.particle_densities_derivatives[p_i] = density_adv
 
 
     @ti.func
@@ -163,16 +163,16 @@ class DFSPHSolver(SPHBase):
     
 
     @ti.kernel
-    def compute_density_adv(self):
+    def compute_density_star(self):
         for p_i in range(self.container.particle_num[None]):
             delta = 0.0
-            self.container.for_all_neighbors(p_i, self.compute_density_adv_task, delta)
+            self.container.for_all_neighbors(p_i, self.compute_density_star_task, delta)
             density_adv = self.container.particle_densities[p_i] /self.density_0 + self.dt[None] * delta
-            self.container.density_adv[p_i] = ti.max(density_adv, 1.0)
+            self.container.particle_densities_star[p_i] = ti.max(density_adv, 1.0)
 
 
     @ti.func
-    def compute_density_adv_task(self, p_i, p_j, ret: ti.template()):
+    def compute_density_star_task(self, p_i, p_j, ret: ti.template()):
         v_i = self.container.particle_velocities[p_i]
         v_j = self.container.particle_velocities[p_j]
         if self.container.particle_materials[p_j] == self.container.material_fluid:
@@ -185,8 +185,16 @@ class DFSPHSolver(SPHBase):
         density_error = 0.0
         for idx_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[idx_i] == self.container.material_fluid:
-                density_error += self.density_0 * self.container.density_adv[idx_i] - offset
-        return density_error
+                density_error += self.density_0 * self.container.particle_densities_star[idx_i] - offset
+        return density_error / self.container.particle_num[None]
+
+    @ti.kernel
+    def compute_density_derivative_error(self, offset: float) -> float:
+        density_error = 0.0
+        for idx_i in range(self.container.particle_num[None]):
+            if self.container.particle_materials[idx_i] == self.container.material_fluid:
+                density_error += self.density_0 * self.container.particle_densities_derivatives[idx_i] - offset
+        return density_error / self.container.particle_num[None]
 
     @ti.kernel
     def multiply_time_step(self, field: ti.template(), time_step: float):
@@ -194,7 +202,12 @@ class DFSPHSolver(SPHBase):
             if self.container.particle_materials[I] == self.container.material_fluid:
                 field[I] *= time_step
 
+    @ti.kernel
+    def compute_kappa_v(self):
+        for idx_i in range(self.container.particle_num[None]):
+            self.container.particle_dfsph_kappa_v[idx_i] = self.container.particle_densities_derivatives[idx_i] * self.container.particle_dfsph_alphas[idx_i]
 
+            
     def correct_divergence_error(self):
         # TODO: warm start 
         # Compute velocity of density change
@@ -230,10 +243,11 @@ class DFSPHSolver(SPHBase):
 
 
     def divergence_solver_iteration(self):
+        self.compute_kappa_v()
         self.divergence_solver_iteration_kernel()
         self.compute_density_change()
-        density_err = self.compute_density_error(0.0)
-        return density_err / self.container.fluid_particle_num
+        density_err = self.compute_density_derivative_error(0.0)
+        return density_err
 
 
     @ti.kernel
@@ -243,8 +257,9 @@ class DFSPHSolver(SPHBase):
             if self.container.particle_materials[p_i] != self.container.material_fluid:
                 continue
             # evaluate rhs
-            b_i = self.container.density_adv[p_i]
-            k_i = b_i*self.container.particle_dfsph_alphas[p_i]
+            # b_i = self.container.particle_densities_derivatives[p_i]
+            # k_i = b_i*self.container.particle_dfsph_alphas[p_i]
+            k_i = self.container.particle_dfsph_kappa_v[p_i]
             ret = ti.Struct(dv=ti.Vector([0.0 for _ in range(self.container.dim)]), k_i=k_i)
             # TODO: if warm start
             # get_kappa_V += k_i
@@ -256,22 +271,26 @@ class DFSPHSolver(SPHBase):
     def divergence_solver_iteration_task(self, p_i, p_j, ret: ti.template()):
         if self.container.particle_materials[p_j] == self.container.material_fluid:
             # Fluid neighbors
-            b_j = self.container.density_adv[p_j]
-            k_j = b_j * self.container.particle_dfsph_alphas[p_j]
+            # b_j = self.container.particle_densities_derivatives[p_j]
+            # k_j = b_j * self.container.particle_dfsph_alphas[p_j]
+            k_j = self.container.particle_dfsph_kappa_v[p_j]
             k_i = ret.k_i
             k_sum = k_i + self.density_0 / self.density_0 * k_j  # TODO: make the neighbor density0 different for multiphase fluid
             if ti.abs(k_sum) > self.m_eps:
                 grad_p_j = -self.container.particle_volumes[p_j] * self.cubic_kernel_derivative(self.container.particle_positions[p_i] - self.container.particle_positions[p_j])
                 ret.dv -= self.dt[None] * grad_p_j * (k_i / self.container.particle_densities[p_i] + k_j / self.container.particle_densities[p_j]) * self.density_0
     
-
+    @ti.kernel
+    def compute_kappa(self):
+        for idx_i in range(self.container.particle_num[None]):
+            self.container.particle_dfsph_kappa[idx_i] = (self.container.particle_densities_star[idx_i] - 1.0) * self.container.particle_dfsph_alphas[idx_i]
     def correct_density_error(self):
         inv_dt2 = 1 / (self.dt[None] * self.dt[None])
 
         # TODO: warm start
         
         # Compute rho_adv
-        self.compute_density_adv()
+        self.compute_density_star()
 
         self.multiply_time_step(self.container.particle_dfsph_alphas, inv_dt2)
 
@@ -297,10 +316,11 @@ class DFSPHSolver(SPHBase):
         # also remove for kappa v
     
     def pressure_solve_iteration(self):
+        self.compute_kappa()
         self.pressure_solve_iteration_kernel()
-        self.compute_density_adv()
+        self.compute_density_star()
         density_err = self.compute_density_error(self.density_0)
-        return density_err / self.container.particle_num[None]
+        return density_err 
 
     
     @ti.kernel
@@ -310,8 +330,9 @@ class DFSPHSolver(SPHBase):
             if self.container.particle_materials[p_i] != self.container.material_fluid:
                 continue
             # Evaluate rhs
-            b_i = self.container.density_adv[p_i] - 1.0
-            k_i = b_i * self.container.particle_dfsph_alphas[p_i]
+            # b_i = self.container.particle_densities_star[p_i] - 1.0
+            # k_i = b_i * self.container.particle_dfsph_alphas[p_i]
+            k_i = self.container.particle_dfsph_kappa[p_i]
 
             # TODO: if warmstart
             # get kappa V
@@ -322,8 +343,9 @@ class DFSPHSolver(SPHBase):
     def pressure_solve_iteration_task(self, p_i, p_j, k_i: ti.template()):
         if self.container.particle_materials[p_j] == self.container.material_fluid:
             # Fluid neighbors
-            b_j = self.container.density_adv[p_j] - 1.0
-            k_j = b_j * self.container.particle_dfsph_alphas[p_j]
+            # b_j = self.container.particle_densities_star[p_j] - 1.0
+            # k_j = b_j * self.container.particle_dfsph_alphas[p_j]
+            k_j = self.container.particle_dfsph_kappa[p_j]
             k_sum = k_i +  k_j 
             if ti.abs(k_sum) > self.m_eps:
                 grad_p_j = -self.container.particle_volumes[p_j] * self.cubic_kernel_derivative(self.container.particle_positions[p_i] - self.container.particle_positions[p_j])
@@ -342,10 +364,10 @@ class DFSPHSolver(SPHBase):
         self.compute_non_pressure_forces()
         self.update_velocities()
         self.correct_density_error()
-        self.update_positions()
+        self.update_position()
         self.enforce_boundary_3D(self.container.material_fluid)
 
         self.container.initialize_particle_system()
-        self.compute_densities()
+        self.compute_density()
         self.compute_DFSPH_factor()
         self.correct_divergence_error()

@@ -96,7 +96,8 @@ class Container3d:
         self.particle_dfsph_alphas = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_dfsph_kappa = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_dfsph_kappa_v = ti.field(dtype=float, shape=self.particle_max_num)
-        self.density_adv = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_densities_star = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_densities_derivatives = ti.field(dtype=float, shape=self.particle_max_num)
 
         # Buffer for sort
         self.object_id_buffer = ti.field(dtype=int, shape=self.particle_max_num)
@@ -274,7 +275,7 @@ class Container3d:
 
             if ti.static(self.simulation_method == 4):
                 self.particle_dfsph_alphas_buffer[new_index] = self.particle_dfsph_alphas[I]
-                self.density_adv_buffer[new_index] = self.density_adv[I]
+                self.density_adv_buffer[new_index] = self.particle_densities_star[I]
         
         for I in ti.grouped(self.particle_positions):
             self.grid_ids[I] = self.grid_ids_buffer[I]
@@ -293,7 +294,7 @@ class Container3d:
 
             if ti.static(self.simulation_method == 4):
                 self.particle_dfsph_alphas[I] = self.particle_dfsph_alphas_buffer[I]
-                self.density_adv[I] = self.density_adv_buffer[I]
+                self.particle_densities_star[I] = self.density_adv_buffer[I]
     
 
     def initialize_particle_system(self):

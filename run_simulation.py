@@ -36,7 +36,7 @@ if __name__ == "__main__":
     solver.initialize()
 
     ps.initialize_particle_system()
-    solver.compute_densities()
+    solver.compute_density()
     solver.compute_DFSPH_factor()
 
     window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)
